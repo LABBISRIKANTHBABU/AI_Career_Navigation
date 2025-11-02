@@ -119,17 +119,9 @@ export const analyzeResumeWithThinking = async (resumeText: string, jobDescripti
 
 export const searchJobsWithGrounding = async (jobDescription: string): Promise<JobSearchData> => {
     const prompt = `
-        You are an expert job search assistant specializing in sourcing information from LinkedIn.
-        Based on the following job description, perform a targeted Google Search focused specifically on LinkedIn.com job postings to find up to 10 of the most relevant and official job openings.
-        For each job posting you find, your primary task is to diligently search the content for a publicly listed contact email for HR, the recruiter, or a general application inbox.
-
-        Return the result as a single JSON object with a key "Job_Listings".
-        The value of "Job_Listings" should be an array of job objects.
-        Each job object must have the following keys: "Title", "Company", "Location", and "Apply_URL".
-        If you successfully find a contact email, you MUST include it under the key "Contact_Email". If no email is found for a job, omit this key for that job object.
-
-        Do not include any other text, explanations, or markdown formatting outside of the JSON object.
-
+        Use Google Search to find up to 10 official job postings on LinkedIn based on the following job description.
+        For each job, extract the Title, Company, Location, the direct Apply_URL, and a public Contact_Email if available.
+        
         Job Description:
         ${jobDescription}
     `;
@@ -139,14 +131,22 @@ export const searchJobsWithGrounding = async (jobDescription: string): Promise<J
             model: 'gemini-flash-latest',
             contents: prompt,
             config: {
-                tools: [{ googleSearch: {} }],
+                 systemInstruction: `You are a job search API that uses Google Search. Your only output is a single, raw JSON object with a single key "Job_Listings". The value should be an array of job objects. Each job object must contain: "Title" (string), "Company" (string), "Location" (string), "Apply_URL" (string), and "Contact_Email" (string, or empty string if not found). Your search query must include "site:linkedin.com/jobs". Do not include markdown, comments, or any other text outside of the JSON object.`,
+                 tools: [{ googleSearch: {} }],
             },
         });
 
-        const text = response.text;
-        // Clean the response to extract only the JSON part
-        const jsonString = text.substring(text.indexOf('{'), text.lastIndexOf('}') + 1);
+        const textResponse = response.text;
+        // Robustly extract the JSON object from the response string,
+        // which might include markdown backticks.
+        const jsonMatch = textResponse.match(/```json\s*([\s\S]*?)\s*```|({[\s\S]*})|(\[[\s\S]*\])/);
+        if (!jsonMatch) {
+            console.error("Raw response from Gemini:", textResponse);
+            throw new Error("Failed to find a valid JSON object in the model's response.");
+        }
+        const jsonString = jsonMatch[1] || jsonMatch[2] || jsonMatch[3];
         const parsedData = JSON.parse(jsonString);
+
 
         const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
         const sources: GroundingSource[] = groundingChunks
@@ -154,16 +154,19 @@ export const searchJobsWithGrounding = async (jobDescription: string): Promise<J
                 title: chunk.web?.title || 'Source',
                 uri: chunk.web?.uri,
             }))
-            .filter((source: GroundingSource) => source.uri);
+            .filter((source: { uri: any; }) => source.uri);
 
         return {
             Job_Listings: parsedData.Job_Listings || [],
-            Message: `Found ${parsedData.Job_Listings?.length || 0} relevant jobs.`,
+            Message: `Found ${parsedData.Job_Listings?.length || 0} relevant jobs from LinkedIn.`,
             sources,
         };
     } catch (error) {
         console.error("Error searching for jobs with grounding:", error);
-        throw new Error("Failed to get job search results from Gemini.");
+        if (error instanceof SyntaxError) {
+            throw new Error("Failed to parse the job search results. The model returned malformed JSON.");
+        }
+        throw new Error("Failed to get job search results from Gemini. The model may have returned an invalid format.");
     }
 };
 

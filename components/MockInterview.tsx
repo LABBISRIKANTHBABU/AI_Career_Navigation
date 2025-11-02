@@ -1,5 +1,4 @@
 
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, LiveSession, LiveServerMessage, Modality, Blob } from '@google/genai';
 import { encode, decode, decodeAudioData } from '../utils/audio';
@@ -18,9 +17,21 @@ const statusMessages: Record<InterviewStatus, string> = {
     ended: 'Interview session has ended. You can start a new one.',
 };
 
+const TranscriptBubble: React.FC<{ message: ChatMessage }> = ({ message }) => (
+    <div className={`flex items-start gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>
+        {message.role === 'model' && <div className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center bg-brand-primary text-white"><SparklesIcon className="w-5 h-5" /></div>}
+        <div className={`max-w-xl rounded-2xl px-4 py-3 text-sm md:text-base ${message.role === 'user' ? 'bg-brand-primary text-white rounded-br-none' : 'bg-base-300 text-base-content rounded-bl-none'}`}>
+            <p style={{ whiteSpace: 'pre-wrap' }}>{message.content}</p>
+        </div>
+        {message.role === 'user' && <div className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center bg-base-300 text-base-content"><UserCircleIcon className="w-6 h-6" /></div>}
+    </div>
+);
+
 export const MockInterview: React.FC<MockInterviewProps> = () => {
     const [status, setStatus] = useState<InterviewStatus>('idle');
     const [transcript, setTranscript] = useState<ChatMessage[]>([]);
+    const [liveUserTranscript, setLiveUserTranscript] = useState('');
+    const [liveAiTranscript, setLiveAiTranscript] = useState('');
     
     const sessionRef = useRef<Promise<LiveSession> | null>(null);
     const audioContextRef = useRef<AudioContext | null>(null);
@@ -34,6 +45,15 @@ export const MockInterview: React.FC<MockInterviewProps> = () => {
     
     const currentInputTranscriptionRef = useRef('');
     const currentOutputTranscriptionRef = useRef('');
+    const messagesEndRef = useRef<HTMLDivElement>(null);
+
+    const scrollToBottom = () => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    useEffect(() => {
+        scrollToBottom();
+    }, [transcript, liveUserTranscript, liveAiTranscript]);
 
     const cleanup = useCallback(() => {
         if (sessionRef.current) {
@@ -69,6 +89,8 @@ export const MockInterview: React.FC<MockInterviewProps> = () => {
     const startInterview = async () => {
         setStatus('connecting');
         setTranscript([]);
+        setLiveUserTranscript('');
+        setLiveAiTranscript('');
         
         try {
             // Re-initialize AI client just-in-time to ensure the latest API key is used.
@@ -105,10 +127,14 @@ export const MockInterview: React.FC<MockInterviewProps> = () => {
                     },
                     onmessage: async (message: LiveServerMessage) => {
                         if (message.serverContent?.outputTranscription) {
-                            currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
+                            const newText = message.serverContent.outputTranscription.text;
+                            currentOutputTranscriptionRef.current += newText;
+                            setLiveAiTranscript(currentOutputTranscriptionRef.current);
                         }
                         if (message.serverContent?.inputTranscription) {
-                            currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
+                            const newText = message.serverContent.inputTranscription.text;
+                            currentInputTranscriptionRef.current += newText;
+                            setLiveUserTranscript(currentInputTranscriptionRef.current);
                         }
 
                         if (message.serverContent?.turnComplete) {
@@ -122,6 +148,8 @@ export const MockInterview: React.FC<MockInterviewProps> = () => {
                             });
                             currentInputTranscriptionRef.current = '';
                             currentOutputTranscriptionRef.current = '';
+                            setLiveUserTranscript('');
+                            setLiveAiTranscript('');
                         }
                         
                         const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
@@ -200,19 +228,16 @@ export const MockInterview: React.FC<MockInterviewProps> = () => {
 
             <div className="flex-grow overflow-y-auto pr-4 space-y-6 bg-base-100 p-4 rounded-lg">
                 {transcript.map((msg, index) => (
-                    <div key={index} className={`flex items-start gap-3 ${msg.role === 'user' ? 'justify-end' : ''}`}>
-                        {msg.role === 'model' && <div className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center bg-brand-primary text-white"><SparklesIcon className="w-5 h-5" /></div>}
-                        <div className={`max-w-xl rounded-2xl px-4 py-3 text-sm md:text-base ${msg.role === 'user' ? 'bg-brand-primary text-white rounded-br-none' : 'bg-base-300 text-base-content rounded-bl-none'}`}>
-                            <p style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</p>
-                        </div>
-                        {msg.role === 'user' && <div className="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center bg-base-300 text-base-content"><UserCircleIcon className="w-6 h-6" /></div>}
-                    </div>
+                    <TranscriptBubble key={`history-${index}`} message={msg} />
                 ))}
-                 {transcript.length === 0 && status !== 'idle' && (
+                {liveUserTranscript && <TranscriptBubble message={{ role: 'user', content: liveUserTranscript }} />}
+                {liveAiTranscript && <TranscriptBubble message={{ role: 'model', content: liveAiTranscript }} />}
+                 {transcript.length === 0 && !liveUserTranscript && !liveAiTranscript && status !== 'idle' && (
                     <div className="text-center text-base-content/50">
                         The interview will begin shortly. The first question from the AI will appear here.
                     </div>
                 )}
+                <div ref={messagesEndRef} />
             </div>
         </div>
     );
