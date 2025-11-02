@@ -1,0 +1,7 @@
+{
+  "name": "AI Career Navigator",
+  "description": "An AI-powered assistant to analyze resumes against job descriptions, check ATS scores, find matching job roles, and streamline the application process through n8n automation.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
